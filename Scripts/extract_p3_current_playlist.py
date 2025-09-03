@@ -1,23 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-from __future__ import print_function
 import requests
-import json
-import csv
-import sys
-import codecs
 import re
 import os
-import random
 from datetime import datetime, timedelta
 from langdetect import detect
 from bs4 import BeautifulSoup
 import pandas as pd
 
-# Ensure UTF-8 encoding for Python 2.7
-if sys.version_info[0] < 3:
-    reload(sys)
-    sys.setdefaultencoding('utf-8')
 
 def get_p3_current_playlist():
     """Fetch the current playlist data for DR P3 using the official DR API."""
@@ -63,7 +53,7 @@ def get_p3_current_playlist():
                                 try:
                                     time_obj = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S")
                                     time_str = time_obj.strftime("%H:%M")
-                                except:
+                                except Exception:
                                     time_str = "00:00"
                                 
                                 playlist_data.append({
@@ -214,11 +204,11 @@ def is_definitely_danish(text, artist=""):
         text (str): The song title to check
         artist (str): The artist name, used for additional context
     """
-    # Convert to unicode if needed (for Python 2.7)
-    if isinstance(text, str):
-        text = text.decode('utf-8')
-    if isinstance(artist, str):
-        artist = artist.decode('utf-8')
+    # Ensure text/artist are str in Python 3; decode only if bytes
+    if isinstance(text, bytes):
+        text = text.decode('utf-8', errors='ignore')
+    if isinstance(artist, bytes):
+        artist = artist.decode('utf-8', errors='ignore')
         
     # Check for Danish-specific characters in both title and artist
     danish_chars = [u'æ', u'ø', u'å', u'Æ', u'Ø', u'Å']
@@ -299,11 +289,11 @@ def is_english(text, artist=""):
         text (str): The song title to check
         artist (str): The artist name, used for additional context
     """
-    # Convert to unicode if needed (for Python 2.7)
-    if isinstance(text, str):
-        text = text.decode('utf-8')
-    if isinstance(artist, str):
-        artist = artist.decode('utf-8')
+    # Ensure text/artist are str in Python 3; decode only if bytes
+    if isinstance(text, bytes):
+        text = text.decode('utf-8', errors='ignore')
+    if isinstance(artist, bytes):
+        artist = artist.decode('utf-8', errors='ignore')
     
     # First check if it's Danish - if so, it's definitely not English
     if is_definitely_danish(text, artist):

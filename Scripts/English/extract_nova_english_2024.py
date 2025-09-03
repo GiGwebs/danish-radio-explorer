@@ -14,11 +14,6 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import os
 
-# Ensure UTF-8 encoding for Python 2.7
-if sys.version_info[0] < 3:
-    reload(sys)
-    sys.setdefaultencoding('utf-8')
-
 def get_nova_playlist(date_str):
     """Fetch playlist data for a specific date from OnlineRadioBox."""
     print("Fetching data for {}".format(date_str))
@@ -117,9 +112,9 @@ def get_nova_playlist(date_str):
 
 def is_english(text):
     """Detect if text is in English language."""
-    # Convert to unicode if needed (for Python 2.7)
-    if isinstance(text, str):
-        text = text.decode('utf-8')
+    # Ensure text is a str
+    if isinstance(text, bytes):
+        text = text.decode('utf-8', errors='ignore')
         
     # Check for Danish-specific characters
     danish_chars = [u'æ', u'ø', u'å', u'Æ', u'Ø', u'Å']

@@ -1,11 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-from __future__ import print_function
 import requests
-import json
-import csv
-import sys
-import codecs
 import re
 import time
 from datetime import datetime, timedelta
@@ -13,11 +8,6 @@ from langdetect import detect
 from bs4 import BeautifulSoup
 import pandas as pd
 import os
-
-# Ensure UTF-8 encoding for Python 2.7
-if sys.version_info[0] < 3:
-    reload(sys)
-    sys.setdefaultencoding('utf-8')
 
 def get_nova_playlist(date_str):
     """Fetch playlist data for a specific date from OnlineRadioBox."""
@@ -117,12 +107,10 @@ def get_nova_playlist(date_str):
 
 def is_definitely_danish(text):
     """More robust Danish language detection for song titles."""
-    # Convert to unicode if needed (for Python 2.7)
-    if isinstance(text, str):
-        text = text.decode('utf-8')
-        
+    if isinstance(text, bytes):
+        text = text.decode('utf-8', errors='ignore')
     # Check for Danish-specific characters
-    danish_chars = [u'æ', u'ø', u'å', u'Æ', u'Ø', u'Å']
+    danish_chars = ['æ', 'ø', 'å', 'Æ', 'Ø', 'Å']
     has_danish_chars = any(char in text for char in danish_chars)
     
     # Attempt language detection

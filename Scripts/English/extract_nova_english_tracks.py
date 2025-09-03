@@ -1,22 +1,14 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-from __future__ import print_function
 import requests
-import json
-import csv
-import sys
-import codecs
 import re
 import time
 from datetime import datetime, timedelta
 from langdetect import detect
 from bs4 import BeautifulSoup
 import pandas as pd
+import os
 
-# Ensure UTF-8 encoding for Python 2.7
-if sys.version_info[0] < 3:
-    reload(sys)
-    sys.setdefaultencoding('utf-8')
 
 def get_nova_playlist(date_str):
     """Fetch playlist data for a specific date from OnlineRadioBox."""
@@ -114,11 +106,12 @@ def get_nova_playlist(date_str):
     print("Max retries exceeded for {}".format(date_str))
     return None
 
+
 def is_english(text):
     """Detect if text is in English language."""
-    # Convert to unicode if needed (for Python 2.7)
-    if isinstance(text, str):
-        text = text.decode('utf-8')
+    # Ensure text is a str in Python 3; decode only if bytes
+    if isinstance(text, bytes):
+        text = text.decode('utf-8', errors='ignore')
         
     # Check for Danish-specific characters
     danish_chars = [u'æ', u'ø', u'å', u'Æ', u'Ø', u'Å']
@@ -135,6 +128,7 @@ def is_english(text):
     except Exception:
         # Default to not English if detection fails
         return False
+
 
 def process_nova_data_for_2025():
     """Process NOVA Radio data for 2025 (Jan 1 through May 22), extracting English titles."""
@@ -184,6 +178,7 @@ def process_nova_data_for_2025():
     
     return english_tracks
 
+
 def save_to_csv(tracks, filename):
     """Save processed tracks to CSV file."""
     if not tracks:
@@ -206,6 +201,7 @@ def save_to_csv(tracks, filename):
     df.to_csv(filename, index=False, encoding='utf-8')
     
     return True
+
 
 def summarize_tracks(input_csv, output_csv):
     """Summarize tracks by counting occurrences."""
@@ -238,16 +234,20 @@ def summarize_tracks(input_csv, output_csv):
     
     return len(summary_df)
 
+
 def main():
     print("Starting NOVA Radio English titles extraction for 2025...")
     print("This will process data from January 1 to May 22, 2025")
     
     # Set up file paths with better organization
     # Use relative paths to work from any directory
-    import os
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.path.abspath(os.path.join(script_dir, '../..'))
     
+    # Define date range used for file naming (align with process function)
+    start_date = datetime(2025, 1, 1)
+    end_date = datetime(2025, 5, 22)
+
     # Extract the year from the date range for folder organization
     start_year = str(start_date.year)
     
@@ -286,6 +286,7 @@ def main():
             print("\nTotal unique English tracks: {}".format(len(summary_df)))
         except Exception as e:
             print("Error displaying summary: {}".format(e))
+
 
 if __name__ == "__main__":
     main()

@@ -72,3 +72,10 @@ Cargo.lock
 # Temporary files
 tmp/
 temp/
+
+# Virtual Environment (local)
+.venv/
+
+# Project outputs and logs
+Outputs/
+Logs/

@@ -11,7 +11,8 @@ Usage:
     python prepare_playlist_transfer.py [--source SOURCE] [--name NAME]
 
 Arguments:
-    --source SOURCE: 'radio' for radio playlists or path to a custom CSV file
+    --source SOURCE: 'radio' for radio playlists, 'new_tracks' for delta-only export
+                     from Outputs/New_Tracks/, or path to a custom CSV file
     --name NAME: Custom name for the output playlist (default: based on source)
 
 Dependencies:
@@ -25,6 +26,9 @@ import pandas as pd
 import logging
 import shutil
 from datetime import datetime
+import json
+import re
+from urllib.parse import quote as urlquote
 
 # Configure logging
 logging.basicConfig(
@@ -174,6 +178,143 @@ KNOWN_ARTISTS = [
     'Katy Perry', 'P!nk', 'Alicia Keys', 'Usher', 'John Legend', 'Mariah Carey',
 ]
 
+# -------------------------
+# Downloaded index helpers
+# -------------------------
+
+TOKEN_DROP = {
+    'feat', 'ft', 'featuring', 'remix', 'edit', 'version', 'radio', 'mix'
+}
+_WS_RE = re.compile(r"\s+")
+_PUNC_RE = re.compile(r"[\(\)\[\]\{\}/\\:,;._\-]+")
+
+def _norm_text(t: str) -> str:
+    t = (t or '').lower()
+    t = t.replace("’", "'")
+    t = _PUNC_RE.sub(" ", t)
+    parts = [p for p in t.split() if p not in TOKEN_DROP]
+    t = " ".join(parts)
+    t = _WS_RE.sub(" ", t).strip()
+    return t
+
+def _make_key(artist: str, title: str) -> str:
+    return f"{_norm_text(artist)} - {_norm_text(title)}".strip()
+
+def _to_file_url(path: str) -> str:
+    # Produce a file:// URL; keep it simple for Finder compatibility
+    return f"file://{urlquote(path)}"
+
+def _excel_col_letter(idx: int) -> str:
+    """Convert 0-based column index to Excel column letter (A, B, ...)."""
+    idx += 1
+    letters = ""
+    while idx > 0:
+        idx, rem = divmod(idx - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+def write_review_xlsx(annotated_df: pd.DataFrame, xlsx_path: str):
+    """Write a color-coded XLSX review file.
+
+    - Entire row highlighted light green when AlreadyDownloaded == 'Yes'
+    - Freeze header row, add autofilter
+    - Auto-fit columns
+    - URLs (e.g., file://) remain clickable
+    """
+    try:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(xlsx_path), exist_ok=True)
+
+        with pd.ExcelWriter(
+            xlsx_path,
+            engine='xlsxwriter',
+            engine_kwargs={'options': {'strings_to_urls': True}},
+        ) as writer:
+            sheet_name = 'Tracks'
+            annotated_df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+            workbook = writer.book
+            worksheet = writer.sheets[sheet_name]
+
+            nrows, ncols = annotated_df.shape
+
+            # Freeze header row and add autofilter
+            worksheet.freeze_panes(1, 0)
+            worksheet.autofilter(0, 0, nrows, ncols - 1)
+
+            # Auto-fit columns based on cell content length
+            for col_idx, col_name in enumerate(annotated_df.columns):
+                series = annotated_df[col_name].astype(str).fillna("")
+                max_len = max([len(str(col_name))] + [len(x) for x in series.tolist()])
+                max_len = min(max_len + 2, 60)  # add padding, cap width
+                worksheet.set_column(col_idx, col_idx, max_len)
+            
+            # Alternate row banding for readability (applies to all non-header rows)
+            band_fmt = workbook.add_format({'bg_color': '#F2F2F2'})
+            worksheet.conditional_format(
+                1, 0, nrows, ncols - 1,
+                {
+                    'type': 'formula',
+                    'criteria': '=MOD(ROW(),2)=0',
+                    'format': band_fmt,
+                }
+            )
+
+            # Conditional formatting: green rows for AlreadyDownloaded == 'Yes'
+            if 'AlreadyDownloaded' in annotated_df.columns:
+                ad_col_idx = list(annotated_df.columns).index('AlreadyDownloaded')
+                ad_col_letter = _excel_col_letter(ad_col_idx)
+                green_fmt = workbook.add_format({'bg_color': '#C6EFCE'})
+                # Apply from first data row (row 1) across all columns
+                worksheet.conditional_format(
+                    1, 0, nrows, ncols - 1,
+                    {
+                        'type': 'formula',
+                        'criteria': f'=${ad_col_letter}2="Yes"',
+                        'format': green_fmt,
+                    }
+                )
+
+        logger.info(f"Created review XLSX: {xlsx_path}")
+    except Exception as e:
+        logger.warning(f"Failed to write review XLSX '{xlsx_path}': {e}")
+
+def load_downloaded_index_map(base_dir: str):
+    """Load downloaded_index.json and return a dict key->path."""
+    try:
+        cache_path = os.path.join(base_dir, 'Outputs', 'Cache', 'downloaded_index.json')
+        if not os.path.exists(cache_path):
+            return None
+        with open(cache_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        items = data.get('items', [])
+        mapping = {}
+        for it in items:
+            key = it.get('key')
+            p = it.get('path')
+            if key and p and key not in mapping:
+                mapping[key] = p
+        return mapping
+    except Exception as e:
+        logger.warning(f"Failed to load downloaded index: {e}")
+        return None
+
+def annotate_records(records: list, downloaded_map: dict | None):
+    """Add AlreadyDownloaded and LocalPath based on downloaded map."""
+    if not downloaded_map:
+        return records
+    out = []
+    for item in records:
+        artist = item.get('Artist', '')
+        title = item.get('Title', '')
+        key = _make_key(artist, title)
+        local = downloaded_map.get(key)
+        item2 = dict(item)
+        item2['AlreadyDownloaded'] = 'Yes' if local else 'No'
+        item2['LocalPath'] = _to_file_url(local) if local else ''
+        out.append(item2)
+    return out
+
 def get_latest_playlist_file(directory):
     """Get the most recent playlist file in a directory"""
     try:
@@ -186,6 +327,18 @@ def get_latest_playlist_file(directory):
         return os.path.join(directory, files[0])
     except Exception as e:
         logger.error(f"Error finding latest playlist file in {directory}: {str(e)}")
+        return None
+
+def get_latest_file_by_prefix(directory, prefix):
+    """Get the most recent CSV file in a directory that starts with a prefix"""
+    try:
+        files = [f for f in os.listdir(directory) if f.startswith(prefix) and f.endswith('.csv')]
+        if not files:
+            return None
+        files.sort(key=lambda x: os.path.getmtime(os.path.join(directory, x)), reverse=True)
+        return os.path.join(directory, files[0])
+    except Exception as e:
+        logger.error(f"Error finding latest file with prefix '{prefix}' in {directory}: {str(e)}")
         return None
 
 def read_playlist_file(file_path):
@@ -328,7 +481,7 @@ def deduplicate_tracks(data):
     deduplicated.sort(key=lambda x: x.get('Artist', '').lower())
     return deduplicated
 
-def create_transfer_csv(tracks, output_file):
+def create_transfer_csv(tracks, output_file, downloaded_map=None, write_annotated: bool = False, write_xlsx_review: bool = False):
     """Create a CSV in transfer service format for importing"""
     try:
         # Extract artist and title from the "Track" column
@@ -392,6 +545,18 @@ def create_transfer_csv(tracks, output_file):
         # Create DataFrame and save to CSV
         transfer_df = pd.DataFrame(deduplicated_data)
         transfer_df.to_csv(output_file, index=False)
+
+        # Optionally write annotated copy (and XLSX review)
+        if downloaded_map and write_annotated:
+            annotated = annotate_records(deduplicated_data, downloaded_map)
+            annotated_df = pd.DataFrame(annotated)
+            annotated_file = os.path.splitext(output_file)[0] + '_annotated.csv'
+            annotated_df.to_csv(annotated_file, index=False)
+            logger.info("Created annotated transfer CSV: {}".format(annotated_file))
+
+            if write_xlsx_review:
+                review_xlsx = os.path.splitext(output_file)[0] + '_review.xlsx'
+                write_review_xlsx(annotated_df, review_xlsx)
         
         # Log results
         if duplicate_count > 0:
@@ -429,7 +594,7 @@ def clean_old_files():
     except Exception as e:
         logger.error(f"Error cleaning old files: {str(e)}")
 
-def prepare_radio_playlists():
+def prepare_radio_playlists(downloaded_map=None, annotate: bool = False, xlsx_review: bool = False):
     """Prepare CSV files from radio playlists"""
     print("\n--- Prepare Radio Playlists for Transfer ---\n")
     
@@ -462,7 +627,13 @@ def prepare_radio_playlists():
             
             # Create transfer format
             danish_transfer_file = os.path.join(transfer_dir, f"Danish_Radio_Hits_{today}.csv")
-            create_transfer_csv(danish_tracks, danish_transfer_file)
+            create_transfer_csv(
+                danish_tracks,
+                danish_transfer_file,
+                downloaded_map=downloaded_map if annotate else None,
+                write_annotated=annotate,
+                write_xlsx_review=(annotate and xlsx_review),
+            )
     
     # Process English tracks
     english_tracks = None
@@ -473,14 +644,78 @@ def prepare_radio_playlists():
             
             # Create transfer format
             english_transfer_file = os.path.join(transfer_dir, f"English_Radio_Hits_{today}.csv")
-            create_transfer_csv(english_tracks, english_transfer_file)
+            create_transfer_csv(
+                english_tracks,
+                english_transfer_file,
+                downloaded_map=downloaded_map if annotate else None,
+                write_annotated=annotate,
+                write_xlsx_review=(annotate and xlsx_review),
+            )
     
     print("\nPlaylists prepared for transfer services!")
     print(f"\nFiles created in: {transfer_dir}")
     
     return True
 
-def prepare_custom_playlist(file_path, name=None):
+def prepare_new_tracks_playlists(downloaded_map=None, annotate: bool = False, xlsx_review: bool = False):
+    """Prepare CSV files from New_Tracks delta-only playlists"""
+    print("\n--- Prepare Delta-only Radio Playlists (New Tracks) for Transfer ---\n")
+
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    new_tracks_dir = os.path.join(base_dir, 'Outputs', 'New_Tracks')
+
+    if not os.path.exists(new_tracks_dir):
+        logger.error("New_Tracks directory not found. Run the automated update to generate new tracks.")
+        print("New_Tracks directory not found. Run the automated update to generate new tracks.")
+        return False
+
+    danish_file = get_latest_file_by_prefix(new_tracks_dir, 'New_Danish_Tracks_')
+    english_file = get_latest_file_by_prefix(new_tracks_dir, 'New_English_Tracks_')
+
+    if not danish_file and not english_file:
+        logger.info("No delta files found in New_Tracks. Nothing to export.")
+        print("No delta files found in New_Tracks. Nothing to export.")
+        return False
+
+    # Create Radio transfer directory
+    transfer_dir = os.path.join(base_dir, 'Outputs', 'Transfer', 'Radio')
+    os.makedirs(transfer_dir, exist_ok=True)
+
+    today = datetime.now().strftime('%Y-%m-%d')
+
+    # Process Danish new tracks
+    if danish_file and os.path.getsize(danish_file) > 0:
+        danish_tracks = read_playlist_file(danish_file)
+        if not danish_tracks.empty:
+            print(f"Found {len(danish_tracks)} new Danish tracks in {os.path.basename(danish_file)}")
+            danish_transfer_file = os.path.join(transfer_dir, f"Danish_Radio_New_{today}.csv")
+            create_transfer_csv(
+                danish_tracks,
+                danish_transfer_file,
+                downloaded_map=downloaded_map if annotate else None,
+                write_annotated=annotate,
+                write_xlsx_review=(annotate and xlsx_review),
+            )
+
+    # Process English new tracks
+    if english_file and os.path.getsize(english_file) > 0:
+        english_tracks = read_playlist_file(english_file)
+        if not english_tracks.empty:
+            print(f"Found {len(english_tracks)} new English tracks in {os.path.basename(english_file)}")
+            english_transfer_file = os.path.join(transfer_dir, f"English_Radio_New_{today}.csv")
+            create_transfer_csv(
+                english_tracks,
+                english_transfer_file,
+                downloaded_map=downloaded_map if annotate else None,
+                write_annotated=annotate,
+                write_xlsx_review=(annotate and xlsx_review),
+            )
+
+    print("\nDelta-only playlists prepared for transfer services!")
+    print(f"\nFiles created in: {transfer_dir}")
+    return True
+
+def prepare_custom_playlist(file_path, name=None, downloaded_map=None, annotate: bool = False, xlsx_review: bool = False):
     """Prepare a custom CSV playlist for transfer"""
     print(f"\n--- Prepare Custom Playlist for Transfer ---\n")
     
@@ -510,7 +745,13 @@ def prepare_custom_playlist(file_path, name=None):
     today = datetime.now().strftime('%Y-%m-%d')
     transfer_file = os.path.join(transfer_dir, f"{name}_{today}.csv")
     
-    if create_transfer_csv(tracks, transfer_file):
+    if create_transfer_csv(
+        tracks,
+        transfer_file,
+        downloaded_map=downloaded_map if annotate else None,
+        write_annotated=annotate,
+        write_xlsx_review=(annotate and xlsx_review),
+    ):
         print(f"\nPlaylist prepared for transfer services!")
         print(f"File created: {transfer_file}")
         return True
@@ -524,15 +765,25 @@ def main():
     clean_old_files()
     
     parser = argparse.ArgumentParser(description='Prepare playlists for transfer services')
-    parser.add_argument('--source', help='radio or path to a custom CSV file', default='radio')
+    parser.add_argument('--source', help="'radio' for full export, 'new_tracks' for delta-only, or path to a custom CSV file", default='radio')
     parser.add_argument('--name', help='Custom name for the output playlist')
+    parser.add_argument('--annotate-downloaded', action='store_true',
+                        help='Add AlreadyDownloaded and LocalPath columns and write *_annotated.csv copies')
+    parser.add_argument('--export-xlsx-review', action='store_true',
+                        help='Also write a color-coded *_review.xlsx (green rows for AlreadyDownloaded=Yes)')
     
     args = parser.parse_args()
     
+    # Determine base_dir and optionally load download index map
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    downloaded_map = load_downloaded_index_map(base_dir) if args.annotate_downloaded else None
+
     if args.source == 'radio':
-        prepare_radio_playlists()
+        prepare_radio_playlists(downloaded_map=downloaded_map, annotate=args.annotate_downloaded, xlsx_review=args.export_xlsx_review)
+    elif args.source in ('new_tracks', 'new', 'delta'):
+        prepare_new_tracks_playlists(downloaded_map=downloaded_map, annotate=args.annotate_downloaded, xlsx_review=args.export_xlsx_review)
     else:
-        prepare_custom_playlist(args.source, args.name)
+        prepare_custom_playlist(args.source, args.name, downloaded_map=downloaded_map, annotate=args.annotate_downloaded, xlsx_review=args.export_xlsx_review)
     
     # Provide transfer instructions
     print("\n--- Transfer Instructions ---\n")

@@ -1,19 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-from __future__ import print_function
 import os
 import sys
-import csv
-import codecs
 import pandas as pd
-from collections import Counter
 from datetime import datetime
 import glob
 
-# Ensure UTF-8 encoding for Python 2.7
-if sys.version_info[0] < 3:
-    reload(sys)
-    sys.setdefaultencoding('utf-8')
 
 # Dictionary mapping station name to OnlineRadioBox identifier
 STATION_MAP = {
@@ -22,7 +14,7 @@ STATION_MAP = {
     'TheVoice': 'thevoice',      # The Voice - popular commercial station
     'Radio100': 'radio100',      # Radio 100 - major adult contemporary station
     'PartyFM': 'partyfm',        # Party FM - niche station with dedicated following
-    'RadioGlobus': 'radioglobus',# Radio Globus
+    'RadioGlobus': 'radioglobus',  # Radio Globus
     'SkalaFM': 'skalafm',        # Skala FM
     'P4': 'drp4kobenhavn',       # DR P4 Copenhagen
     'PopFM': 'poppremium',       # Pop FM
@@ -51,6 +43,7 @@ NO_LANGUAGE_SEPARATION = ['RBClassics']
 
 # All stations will be included in the combined analysis
 
+ 
 def get_station_files(language, station=None):
     """Get all station files for a given language, optionally filtered by station.
     
@@ -77,6 +70,7 @@ def get_station_files(language, station=None):
                 files.extend(glob.glob(os.path.join(station_lang_path, "*.csv")))
     
     return files
+
 
 def consolidate_playlists(language, output_file=None, stations=None):
     """Consolidate playlist data from multiple stations for a given language.
@@ -178,6 +172,7 @@ def consolidate_playlists(language, output_file=None, stations=None):
         print("No {} tracks found in the specified stations".format(language))
         return pd.DataFrame()
 
+
 def consolidate_all_playlists(stations=None):
     """Consolidate all playlist data (Danish, English, combined).
     
@@ -261,6 +256,7 @@ def consolidate_all_playlists(stations=None):
                     count, "s" if count > 1 else "", num_tracks, percentage
                 ))
 
+
 def main():
     """Main function to handle command-line arguments."""
     print("Radio Playlist Consolidator")
@@ -307,7 +303,6 @@ def main():
         if '--primary' in station_args:
             print("Consolidating playlists for primary stations: {}".format(", ".join(PRIMARY_STATIONS)))
             consolidate_all_playlists(PRIMARY_STATIONS)
-            return_val = 0
         else:
             # Filter out special flags
             stations = [arg for arg in station_args if not arg.startswith('--')]
@@ -329,14 +324,15 @@ def main():
 if __name__ == "__main__":
     automated_mode = main()
     
-    # Only prompt in interactive mode
+    # Only prompt in interactive TTY sessions
     prepare_transfer = False
+    is_interactive = sys.stdin.isatty()
     
-    if not automated_mode:
+    if not automated_mode and is_interactive:
         try:
             prepare_transfer = input("\nPrepare CSV files for music service playlist transfer? (y/n): ").lower() == 'y'
         except EOFError:
-            print("\nRunning in non-interactive mode, skipping transfer prompt.")
+            print("\nDetected non-interactive stdin; skipping transfer prompt.")
     
     if prepare_transfer:
         try:

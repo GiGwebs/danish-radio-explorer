@@ -1,26 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-from __future__ import print_function
-import pandas as pd
 import csv
 import sys
-import codecs
+import os
 from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
 
-# Ensure UTF-8 encoding for Python 2.7
-if sys.version_info[0] < 3:
-    reload(sys)
-    sys.setdefaultencoding('utf-8')
-
 def is_definitely_danish(text):
     """More robust Danish language detection for song titles."""
-    # Convert to unicode if needed (for Python 2.7)
-    if isinstance(text, str):
-        text = text.decode('utf-8')
-        
+    # Decode bytes to str if needed (Python 3 robustness)
+    if isinstance(text, bytes):
+        text = text.decode('utf-8', errors='ignore')
     # Check for Danish-specific characters
-    danish_chars = [u'æ', u'ø', u'å', u'Æ', u'Ø', u'Å']
+    danish_chars = ['æ', 'ø', 'å', 'Æ', 'Ø', 'Å']
     has_danish_chars = any(char in text for char in danish_chars)
     
     # Attempt language detection, but be more strict
@@ -53,7 +45,6 @@ def filter_danish_tracks(year="2025", date_range="2025-01-01_to_2025-05-22"):
         date_range (str): Date range of the data in format YYYY-MM-DD_to_YYYY-MM-DD
     """
     # Use proper path handling
-    import os
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.path.abspath(os.path.join(script_dir, '../..'))
     
@@ -70,7 +61,7 @@ def filter_danish_tracks(year="2025", date_range="2025-01-01_to_2025-05-22"):
     input_file = os.path.join(project_dir, f'Outputs/Archive/{year}/-X- nova_danish_titles_summary.csv')
     
     # Read the summarized data
-    with codecs.open(input_file, 'r', 'utf-8') as f:
+    with open(input_file, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         # Skip header
         header = next(reader)
@@ -91,7 +82,7 @@ def filter_danish_tracks(year="2025", date_range="2025-01-01_to_2025-05-22"):
     
     # Save the filtered data
     output_file = os.path.join(project_dir, f'Outputs/Danish/{year}/NOVA_Danish_Titles_{date_range}.csv')
-    with codecs.open(output_file, 'w', 'utf-8') as f:
+    with open(output_file, 'w', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerow(['Track', 'Repeats'])
         for track, count in tracks:
@@ -105,8 +96,6 @@ def filter_danish_tracks(year="2025", date_range="2025-01-01_to_2025-05-22"):
     return len(tracks)
 
 if __name__ == "__main__":
-    import sys
-    
     # Allow passing year and date range as command-line arguments
     if len(sys.argv) > 1:
         year = sys.argv[1]

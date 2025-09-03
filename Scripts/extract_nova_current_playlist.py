@@ -1,11 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-from __future__ import print_function
 import requests
-import json
-import csv
-import sys
-import codecs
 import re
 import os
 from datetime import datetime, timedelta
@@ -13,10 +8,6 @@ from langdetect import detect
 from bs4 import BeautifulSoup
 import pandas as pd
 
-# Ensure UTF-8 encoding for Python 2.7
-if sys.version_info[0] < 3:
-    reload(sys)
-    sys.setdefaultencoding('utf-8')
 
 def get_nova_current_playlist():
     """Fetch the current playlist data from OnlineRadioBox (past 7 days)."""
@@ -150,11 +141,11 @@ def is_definitely_danish(text, artist=""):
         text (str): The song title to check
         artist (str): The artist name, used for additional context
     """
-    # Convert to unicode if needed (for Python 2.7)
-    if isinstance(text, str):
-        text = text.decode('utf-8')
-    if isinstance(artist, str):
-        artist = artist.decode('utf-8')
+    # Ensure text/artist are str in Python 3; decode only if bytes
+    if isinstance(text, bytes):
+        text = text.decode('utf-8', errors='ignore')
+    if isinstance(artist, bytes):
+        artist = artist.decode('utf-8', errors='ignore')
         
     # Check for Danish-specific characters in both title and artist
     danish_chars = [u'æ', u'ø', u'å', u'Æ', u'Ø', u'Å']
@@ -222,11 +213,11 @@ def is_english(text, artist=""):
         text (str): The song title to check
         artist (str): The artist name, used for additional context
     """
-    # Convert to unicode if needed (for Python 2.7)
-    if isinstance(text, str):
-        text = text.decode('utf-8')
-    if isinstance(artist, str):
-        artist = artist.decode('utf-8')
+    # Ensure text/artist are str in Python 3; decode only if bytes
+    if isinstance(text, bytes):
+        text = text.decode('utf-8', errors='ignore')
+    if isinstance(artist, bytes):
+        artist = artist.decode('utf-8', errors='ignore')
     
     # First check if it's Danish - if so, it's definitely not English
     if is_definitely_danish(text, artist):
