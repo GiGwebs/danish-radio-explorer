@@ -102,6 +102,18 @@ crontab -e
 
 Run a local dashboard to visualize status, drill into stations, trigger a run, and view logs.
 
+### Quick start (recommended)
+
+From the project root:
+
+```bash
+./Scripts/run_dashboard.sh
+```
+
+This script bootstraps the virtual environment (if missing), installs requirements, and starts the app.
+
+### Manual setup (alternative)
+
 1) Install dependencies (inside project root):
 
 ```bash

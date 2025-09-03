@@ -31,7 +31,7 @@ NO_PLAYLIST_MARKER = "NoPlaylist"
 # Utilities
 # --------------------------------------------------------------------------------------
 
- 
+
 def load_status() -> Optional[dict]:
     try:
         with open(STATUS_PATH, "r", encoding="utf-8") as f:
@@ -317,10 +317,11 @@ st.subheader("Logs")
 log_file_from_status = Path(status["log_file"]) if status and status.get("log_file") else None
 available_logs = list_latest_logs(limit=20)
 
-log_choice = st.selectbox(
-    "Choose a log file",
-    options=[str(p) for p in ([log_file_from_status] if log_file_from_status else []) + available_logs],
-)
+pref_list = [log_file_from_status] if log_file_from_status else []
+log_candidates = pref_list + available_logs
+log_options = [str(p) for p in log_candidates]
+
+log_choice = st.selectbox("Choose a log file", options=log_options)
 
 if log_choice:
     path = Path(log_choice)
