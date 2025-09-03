@@ -98,6 +98,28 @@ crontab -e
   /Users/gigwebs/Library/CloudStorage/Dropbox/MUSIC\ BANK/Rekordbox\ Scouts/Rekordbox\ Filter/Radio\ Filter/Logs/cron.out.log 2>&1
 ```
 
+## Frontend dashboard (Streamlit)
+
+Run a local dashboard to visualize status, drill into stations, trigger a run, and view logs.
+
+1) Install dependencies (inside project root):
+
+```bash
+source .venv/bin/activate  # or create: python3 -m venv .venv && source .venv/bin/activate
+python -m pip install -r Scripts/requirements.txt
+```
+
+2) Start the app:
+
+```bash
+streamlit run Scripts/webapp/app.py
+```
+
+Notes:
+- The app reads `Outputs/Status/last_update.json` and `Outputs/Stations/` to render KPIs and per-station files.
+- The "Run now" button calls `Scripts/run_radio_update.sh` and uses a lock file in `Logs/.update.lock` to prevent overlaps.
+- Logs are read from `Logs/auto_update_*.log` and the file referenced in `log_file` within the status JSON.
+
 ## Notes
 - Desktop notifications may not display if the process runs in a non-interactive session. Email remains available via `--notify-email`.
 - The wrapper bootstraps a virtual environment on first run and uses it thereafter.
