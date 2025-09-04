@@ -223,11 +223,43 @@ if status:
     with col5:
         st.metric("No playlist", n)
 
+    # Staleness check and caption
+    gen_text = status.get("generated_at", "-")
+    gen_dt = None
+    try:
+        if gen_text and gen_text != "-":
+            gen_dt = datetime.strptime(gen_text, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        gen_dt = None
+
+    if gen_dt is not None:
+        age = datetime.now() - gen_dt
+        if age.days >= 3:
+            st.error(f"Status is stale: generated {age.days} days ago")
+        elif age.days >= 1:
+            st.warning(f"Status is {age.days} day(s) old")
+
     st.caption(
         f"Date: {status.get('date', '-')}, "
-        f"Generated: {status.get('generated_at', '-')}, "
+        f"Generated: {gen_text}, "
         f"Log: {status.get('log_file', '-')}"
     )
+
+    ctrl1, ctrl2 = st.columns([1, 2])
+    with ctrl1:
+        if st.button("Reload status"):
+            st.experimental_rerun()
+    with ctrl2:
+        try:
+            st.download_button(
+                label="Download status.json",
+                data=STATUS_PATH.read_bytes(),
+                file_name="last_update.json",
+                mime="application/json",
+                key="dl_status_json",
+            )
+        except Exception:
+            pass
 else:
     st.warning("Status file not found. Run the orchestrator to generate outputs.")
 
