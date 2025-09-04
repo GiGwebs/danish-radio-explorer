@@ -127,6 +127,26 @@ python -m pip install -r Scripts/requirements.txt
 streamlit run Scripts/webapp/app.py
 ```
 
+### Features
+
+- KPIs from `Outputs/Status/last_update.json` with staleness warning.
+- Status breakdown bar chart (completed / partial / missing / no_playlist).
+- Station table with filter and drilldown:
+  - Download latest Raw/Danish/English CSVs.
+  - Preview latest CSVs inline with file metadata (name, size, modified time).
+  - Inspect NoPlaylist marker JSONs (if present).
+- Run now: starts orchestrator via `Scripts/run_radio_update.sh` with lock file protection.
+- Logs viewer: picks the log referenced in status by default; manual refresh button.
+- Status controls: Reload page + Download `last_update.json`.
+- Next scheduled run: shows next Tue/Fri 09:30 (local) time.
+
+### Auto-refresh
+
+- Sidebar has Auto-refresh toggles and interval slider.
+  - Status and Logs can be auto-refreshed.
+  - Interval is configurable (default 30s).
+- Powered by `streamlit-autorefresh` (included in `Scripts/requirements.txt`).
+
 Notes:
 - The app reads `Outputs/Status/last_update.json` and `Outputs/Stations/` to render KPIs and per-station files.
 - The "Run now" button calls `Scripts/run_radio_update.sh` and uses a lock file in `Logs/.update.lock` to prevent overlaps.

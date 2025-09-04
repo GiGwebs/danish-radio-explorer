@@ -10,6 +10,10 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
+try:
+    from streamlit_autorefresh import st_autorefresh  # type: ignore
+except Exception:
+    st_autorefresh = None  # type: ignore
 
 # --------------------------------------------------------------------------------------
 # Paths and constants
@@ -246,8 +250,20 @@ with st.sidebar:
     st.code(str(OUTPUTS_DIR))
     st.markdown("**Logs**")
     st.code(str(LOGS_DIR))
+    st.markdown("**Auto-refresh**")
+    auto_status = st.checkbox("Status", value=False, key="auto_status")
+    auto_logs = st.checkbox("Logs", value=False, key="auto_logs")
+    interval = st.slider(
+        "Interval (sec)", min_value=5, max_value=120, value=30, step=5, key="auto_interval"
+    )
+    if st_autorefresh is None and (auto_status or auto_logs):
+        st.info("Auto-refresh helper will be installed automatically.")
 
 status = load_status()
+
+# Global auto-refresh (refreshes entire page)
+if st_autorefresh and (auto_status or auto_logs):
+    st_autorefresh(interval=interval * 1000, key="auto_refresh_tick")
 
 # Top KPIs
 col1, col2, col3, col4, col5 = st.columns(5)
