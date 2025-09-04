@@ -2,6 +2,8 @@
 
 This directory contains the end-to-end automation for extracting radio playlists, consolidating them, and generating transfer files.
 
+[![CI](https://github.com/GiGwebs/danish-radio-explorer/actions/workflows/ci.yml/badge.svg)](https://github.com/GiGwebs/danish-radio-explorer/actions/workflows/ci.yml)
+
 ## Quick start (manual run)
 
 Use the venv-aware wrapper (auto-bootstraps dependencies on first run):
