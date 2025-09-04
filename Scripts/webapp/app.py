@@ -4,7 +4,7 @@ import json
 import subprocess
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -61,6 +61,23 @@ def safe_read(path: Path, max_bytes: int = 200_000) -> str:
         return f"<error reading {path}: {e}>"
 
 
+def next_scheduled_run(now: datetime) -> datetime:
+    """Return next Tue/Fri at 09:30 local time from 'now'."""
+    target_weekdays = {1, 4}  # Tue=1, Fri=4 (Python: Monday=0)
+    target_hour = 9
+    target_minute = 30
+    candidates = []
+    for d in target_weekdays:
+        delta = (d - now.weekday()) % 7
+        cand = (now + timedelta(days=delta)).replace(
+            hour=target_hour, minute=target_minute, second=0, microsecond=0
+        )
+        if cand <= now:
+            cand = cand + timedelta(days=7)
+        candidates.append(cand)
+    return min(candidates)
+
+
 def stations_from_status(status: dict) -> pd.DataFrame:
     completed = status.get("stations_completed", [])
     partial = status.get("stations_partial", [])
@@ -81,6 +98,35 @@ def stations_from_status(status: dict) -> pd.DataFrame:
     if not df.empty:
         df = df.sort_values(["status", "station"]).reset_index(drop=True)
     return df
+
+
+def status_counts_df(status: dict) -> pd.DataFrame:
+    counts = {
+        "completed": len(status.get("stations_completed", [])),
+        "partial": len(status.get("stations_partial", [])),
+        "missing": len(status.get("stations_missing", [])),
+        "no_playlist": len(status.get("stations_no_playlist", [])),
+    }
+    return pd.DataFrame({"status": list(counts.keys()), "count": list(counts.values())})
+
+
+def preview_csv_file(path: Path, nrows: int = 20) -> Optional[pd.DataFrame]:
+    try:
+        return pd.read_csv(path).head(nrows)
+    except Exception:
+        try:
+            return pd.read_csv(path, engine="python").head(nrows)
+        except Exception:
+            return None
+
+
+def file_info(path: Path) -> str:
+    try:
+        stime = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        size = path.stat().st_size
+        return f"{path.name} — {size} bytes — {stime}"
+    except Exception:
+        return path.name
 
 
 def latest_station_files(station: str) -> Dict[str, List[Path]]:
@@ -260,6 +306,17 @@ if status:
             )
         except Exception:
             pass
+
+    nxt = next_scheduled_run(datetime.now())
+    st.caption(f"Next scheduled run: {nxt.strftime('%Y-%m-%d %H:%M')} (local)")
+
+    # Status breakdown chart
+    st.subheader("Status breakdown")
+    try:
+        chart_df = status_counts_df(status)
+        st.bar_chart(chart_df.set_index("status"))
+    except Exception:
+        pass
 else:
     st.warning("Status file not found. Run the orchestrator to generate outputs.")
 
@@ -325,6 +382,47 @@ if status:
             with st.expander("No‑playlist markers"):
                 for p in files["no_playlist_markers"][:3]:
                     st.code(safe_read(p, max_bytes=50_000), language="json")
+
+        # Previews
+        with st.expander("Preview latest files"):
+            p_raw = files["raw"][0] if files["raw"] else None
+            p_da = files["danish_titles"][0] if files["danish_titles"] else None
+            p_en = files["english_titles"][0] if files["english_titles"] else None
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown("**Raw (latest)**")
+                if p_raw:
+                    st.caption(file_info(p_raw))
+                    df_raw = preview_csv_file(p_raw)
+                    if df_raw is not None and not df_raw.empty:
+                        st.dataframe(df_raw, use_container_width=True, hide_index=True)
+                    else:
+                        st.write("(preview unavailable)")
+                else:
+                    st.write("—")
+            with c2:
+                st.markdown("**Danish (latest)**")
+                if p_da:
+                    st.caption(file_info(p_da))
+                    df_da = preview_csv_file(p_da)
+                    if df_da is not None and not df_da.empty:
+                        st.dataframe(df_da, use_container_width=True, hide_index=True)
+                    else:
+                        st.write("(preview unavailable)")
+                else:
+                    st.write("—")
+            with c3:
+                st.markdown("**English (latest)**")
+                if p_en:
+                    st.caption(file_info(p_en))
+                    df_en = preview_csv_file(p_en)
+                    if df_en is not None and not df_en.empty:
+                        st.dataframe(df_en, use_container_width=True, hide_index=True)
+                    else:
+                        st.write("(preview unavailable)")
+                else:
+                    st.write("—")
 
 st.divider()
 
