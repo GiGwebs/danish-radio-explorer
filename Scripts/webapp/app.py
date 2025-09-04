@@ -10,6 +10,8 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
+import io
+import zipfile
 try:
     from streamlit_autorefresh import st_autorefresh  # type: ignore
 except Exception:
@@ -63,6 +65,42 @@ def safe_read(path: Path, max_bytes: int = 200_000) -> str:
         return (data + suffix).decode("utf-8", errors="replace")
     except Exception as e:
         return f"<error reading {path}: {e}>"
+
+
+def list_transfer_files(date_str: Optional[str]) -> List[Path]:
+    """Return transfer files for the given date, or a recent fallback.
+
+    Prefers files matching "*Radio_New*_{date_str}*" under
+    Outputs/Transfer/Radio. Falls back to the most recent Radio_New files.
+    """
+    base = OUTPUTS_DIR / "Transfer" / "Radio"
+    results: List[Path] = []
+    try:
+        if not base.exists():
+            return results
+        if date_str:
+            matches = list(base.glob(f"*Radio_New*_{date_str}*"))
+            if matches:
+                return sorted(matches, key=lambda p: p.name)
+        # Fallback: most recent Radio_New files (up to 6)
+        matches = sorted(
+            base.glob("*Radio_New*"), key=lambda p: p.stat().st_mtime, reverse=True
+        )
+        return matches[:6]
+    except Exception:
+        return results
+
+
+def build_zip_bytes(paths: List[Path]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in paths:
+            try:
+                zf.write(p, arcname=p.name)
+            except Exception:
+                # Skip unreadable files
+                pass
+    return buf.getvalue()
 
 
 def next_scheduled_run(now: datetime) -> datetime:
@@ -345,7 +383,20 @@ if status:
     if df.empty:
         st.info("No stations reported in status.")
     else:
-        filt = st.multiselect("Filter by status", options=sorted(df["status"].unique()), default=[])
+        filt_col, reset_col = st.columns([4, 1])
+        with filt_col:
+            selected = st.multiselect(
+                "Filter by status",
+                options=sorted(df["status"].unique()),
+                default=[],
+                key="status_filter",
+            )
+        with reset_col:
+            if st.button("Reset", key="reset_status_filter"):
+                st.session_state["status_filter"] = []
+                st.experimental_rerun()
+
+        filt = selected
         view = df if not filt else df[df["status"].isin(filt)].reset_index(drop=True)
         st.dataframe(view, use_container_width=True, hide_index=True)
 
@@ -440,6 +491,31 @@ if status:
                 else:
                     st.write("—")
 
+    # Transfer bundle download
+    st.subheader("Transfer bundle")
+    if status:
+        date_str = status.get("date")
+        bundle_files = list_transfer_files(date_str)
+        if bundle_files:
+            try:
+                zip_bytes = build_zip_bytes(bundle_files)
+                st.download_button(
+                    label=f"Download transfer bundle ({len(bundle_files)} files)",
+                    data=zip_bytes,
+                    file_name=f"radio_transfer_{date_str or 'latest'}.zip",
+                    mime="application/zip",
+                    key="dl_transfer_zip",
+                )
+                with st.expander("Files in bundle"):
+                    for p in bundle_files:
+                        st.write(p.name)
+            except Exception as e:
+                st.warning(f"Unable to create transfer bundle: {e}")
+        else:
+            st.info("No transfer files found for the latest date.")
+    else:
+        st.info("Status not loaded; cannot determine latest transfer files.")
+
 st.divider()
 
 # Run Now section
@@ -472,9 +548,36 @@ log_choice = st.selectbox("Choose a log file", options=log_options)
 if log_choice:
     path = Path(log_choice)
     st.caption(f"Showing: {path}")
-    st.code(safe_read(path), language="log")
-    if st.button("Refresh log view"):
-        st.experimental_rerun()
+
+    lc1, lc2, lc3 = st.columns([1, 2, 1])
+    with lc1:
+        tail_n = st.slider("Last N lines", min_value=100, max_value=5000, value=800, step=100, key="tail_n")
+    with lc2:
+        filt_text = st.text_input("Filter (substring)", value="", key="log_filter")
+    with lc3:
+        ci = st.checkbox("Ignore case", value=True, key="log_ci")
+
+    text = safe_read(path)
+    lines = text.splitlines()
+    if filt_text:
+        if ci:
+            q = filt_text.lower()
+            lines = [ln for ln in lines if q in ln.lower()]
+        else:
+            lines = [ln for ln in lines if filt_text in ln]
+    if tail_n and tail_n > 0:
+        lines = lines[-tail_n:]
+    display_text = "\n".join(lines) if lines else "(no matching lines)"
+    st.code(display_text, language="log")
+
+    r1, r2 = st.columns([1, 1])
+    with r1:
+        if st.button("Refresh log view"):
+            st.experimental_rerun()
+    with r2:
+        if st.button("Reset log filter"):
+            st.session_state["log_filter"] = ""
+            st.experimental_rerun()
 
 st.divider()
 

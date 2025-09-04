@@ -136,9 +136,10 @@ streamlit run Scripts/webapp/app.py
   - Preview latest CSVs inline with file metadata (name, size, modified time).
   - Inspect NoPlaylist marker JSONs (if present).
 - Run now: starts orchestrator via `Scripts/run_radio_update.sh` with lock file protection.
-- Logs viewer: picks the log referenced in status by default; manual refresh button.
+- Logs viewer: picks the log referenced in status by default; manual refresh button; tail N lines and substring filter.
 - Status controls: Reload page + Download `last_update.json`.
 - Next scheduled run: shows next Tue/Fri 09:30 (local) time.
+- Transfer bundle: one-click ZIP download of the latest Radio transfer artifacts.
 
 ### Auto-refresh
 
@@ -146,6 +147,21 @@ streamlit run Scripts/webapp/app.py
   - Status and Logs can be auto-refreshed.
   - Interval is configurable (default 30s).
 - Powered by `streamlit-autorefresh` (included in `Scripts/requirements.txt`).
+
+### Transfer bundle
+
+- The "Transfer bundle" section packages the latest transfer files from
+  `Outputs/Transfer/Radio/` into a single ZIP for easy download.
+- It prefers files matching the current status date (e.g., `*_Radio_New_*_YYYY-MM-DD_*`).
+- If no same-date files are found, it falls back to the most recent `*_Radio_New_*` files.
+
+### Logs viewer
+
+- Choose from the status-referenced log or recent `Logs/auto_update_*.log` files.
+- Controls:
+  - "Last N lines" slider to tail recent output.
+  - "Filter (substring)" with case-insensitive toggle.
+  - "Refresh" and "Reset log filter" buttons.
 
 Notes:
 - The app reads `Outputs/Status/last_update.json` and `Outputs/Stations/` to render KPIs and per-station files.
