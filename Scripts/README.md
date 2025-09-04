@@ -98,6 +98,76 @@ crontab -e
   /Users/gigwebs/Library/CloudStorage/Dropbox/MUSIC\ BANK/Rekordbox\ Scouts/Rekordbox\ Filter/Radio\ Filter/Logs/cron.out.log 2>&1
 ```
 
+## Frontend dashboard (Streamlit)
+
+Run a local dashboard to visualize status, drill into stations, trigger a run, and view logs.
+
+### Quick start (recommended)
+
+From the project root:
+
+```bash
+./Scripts/run_dashboard.sh
+```
+
+This script bootstraps the virtual environment (if missing), installs requirements, and starts the app.
+
+### Manual setup (alternative)
+
+1) Install dependencies (inside project root):
+
+```bash
+source .venv/bin/activate  # or create: python3 -m venv .venv && source .venv/bin/activate
+python -m pip install -r Scripts/requirements.txt
+```
+
+2) Start the app:
+
+```bash
+streamlit run Scripts/webapp/app.py
+```
+
+### Features
+
+- KPIs from `Outputs/Status/last_update.json` with staleness warning.
+- Status breakdown bar chart (completed / partial / missing / no_playlist).
+- Station table with filter and drilldown:
+  - Download latest Raw/Danish/English CSVs.
+  - Preview latest CSVs inline with file metadata (name, size, modified time).
+  - Inspect NoPlaylist marker JSONs (if present).
+- Run now: starts orchestrator via `Scripts/run_radio_update.sh` with lock file protection.
+- Logs viewer: picks the log referenced in status by default; manual refresh button; tail N lines and substring filter.
+- Status controls: Reload page + Download `last_update.json`.
+- Next scheduled run: shows next Tue/Fri 09:30 (local) time.
+- Transfer bundle: one-click ZIP download of the latest Radio transfer artifacts.
+
+### Auto-refresh
+
+- Sidebar has Auto-refresh toggles and interval slider.
+  - Status and Logs can be auto-refreshed.
+  - Interval is configurable (default 30s).
+- Powered by `streamlit-autorefresh` (included in `Scripts/requirements.txt`).
+
+### Transfer bundle
+
+- The "Transfer bundle" section packages the latest transfer files from
+  `Outputs/Transfer/Radio/` into a single ZIP for easy download.
+- It prefers files matching the current status date (e.g., `*_Radio_New_*_YYYY-MM-DD_*`).
+- If no same-date files are found, it falls back to the most recent `*_Radio_New_*` files.
+
+### Logs viewer
+
+- Choose from the status-referenced log or recent `Logs/auto_update_*.log` files.
+- Controls:
+  - "Last N lines" slider to tail recent output.
+  - "Filter (substring)" with case-insensitive toggle.
+  - "Refresh" and "Reset log filter" buttons.
+
+Notes:
+- The app reads `Outputs/Status/last_update.json` and `Outputs/Stations/` to render KPIs and per-station files.
+- The "Run now" button calls `Scripts/run_radio_update.sh` and uses a lock file in `Logs/.update.lock` to prevent overlaps.
+- Logs are read from `Logs/auto_update_*.log` and the file referenced in `log_file` within the status JSON.
+
 ## Notes
 - Desktop notifications may not display if the process runs in a non-interactive session. Email remains available via `--notify-email`.
 - The wrapper bootstraps a virtual environment on first run and uses it thereafter.
