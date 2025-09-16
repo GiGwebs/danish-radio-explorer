@@ -5,6 +5,8 @@ import sys
 import pandas as pd
 from datetime import datetime
 import glob
+from pathlib import Path
+ 
 
 
 # Dictionary mapping station name to OnlineRadioBox identifier
@@ -42,6 +44,38 @@ PRIMARY_STATIONS = ['NOVA', 'P3']
 NO_LANGUAGE_SEPARATION = ['RBClassics']
 
 # All stations will be included in the combined analysis
+
+
+# Try to import playlist_lib from Scripts/webapp to leverage meta enrichment
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+WEBAPP_DIR = os.path.join(THIS_DIR, "webapp")
+if WEBAPP_DIR not in sys.path:
+    sys.path.insert(0, WEBAPP_DIR)
+try:
+    import playlist_lib as pl  # type: ignore
+except Exception:
+    pl = None  # fallback: enrichment will be skipped if unavailable
+
+# Defaults consistent with the Streamlit app
+VDJ_DB_PATH_DEFAULT = Path("/Users/gigwebs/Library/Application Support/VirtualDJ/database.xml")
+
+
+def _split_artist_title(track: str) -> tuple[str, str]:
+    """Best-effort split of "Artist - Title" into components.
+
+    Falls back to title-only if format is not as expected.
+    """
+    try:
+        parts = str(track or "").split(" - ", 1)
+        if len(parts) == 2:
+            return parts[0].strip(), parts[1].strip()
+        # Fallback: try a hyphen without spaces
+        parts2 = str(track or "").split("-", 1)
+        if len(parts2) == 2:
+            return parts2[0].strip(), parts2[1].strip()
+        return "", str(track or "").strip()
+    except Exception:
+        return "", str(track or "").strip()
 
  
 def get_station_files(language, station=None):
@@ -161,7 +195,68 @@ def consolidate_playlists(language, output_file=None, stations=None):
             ['Repeats', 'Station_Count', 'Track'], 
             ascending=[False, False, True]
         )
-        
+
+        # Upstream enrichment: derive Artist/Title and add BPM/Key columns
+        try:
+            # Split "Artist - Title"
+            artists = []
+            titles = []
+            for t in result_df['Track'].astype(str).tolist():
+                a, b = _split_artist_title(t)
+                artists.append(a)
+                titles.append(b)
+            result_df['Artist'] = artists
+            result_df['Title'] = titles
+
+            # Build meta sources if playlist_lib is available
+            vdj_meta = {}
+            lib_index = {}
+            if 'pl' in globals() and pl is not None:
+                try:
+                    vdj_meta = pl.build_vdj_meta_index(VDJ_DB_PATH_DEFAULT)
+                except Exception:
+                    vdj_meta = {}
+                try:
+                    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    lib_idx_path = Path(base_dir) / 'Outputs' / 'Cache' / 'library_index.json'
+                    lib_index = pl.load_index(lib_idx_path)
+                except Exception:
+                    lib_index = {}
+
+            by_key = lib_index.get('by_key', {}) if isinstance(lib_index, dict) else {}
+            tracks_meta = lib_index.get('tracks', {}) if isinstance(lib_index, dict) else {}
+
+            bpms = []
+            keys = []
+            for a, b in zip(artists, titles):
+                bpm_val = None
+                key_val = None
+                try:
+                    if 'pl' in globals() and pl is not None:
+                        k = pl.normalize_key(a, b)
+                        vm = vdj_meta.get(k) if isinstance(vdj_meta, dict) else None
+                        if vm:
+                            bpm_val = vm.get('bpm')
+                            key_val = vm.get('key')
+                        if (bpm_val is None) or (not key_val):
+                            paths = by_key.get(k, []) if by_key else []
+                            if paths:
+                                meta = tracks_meta.get(paths[0], {})
+                                if bpm_val is None:
+                                    bpm_val = meta.get('tag_bpm')
+                                if not key_val:
+                                    key_val = meta.get('tag_key')
+                except Exception:
+                    pass
+                bpms.append(bpm_val)
+                keys.append(key_val)
+
+            result_df['BPM'] = bpms
+            result_df['Key'] = keys
+        except Exception:
+            # If enrichment fails, continue with base columns
+            pass
+
         # Save to file if output_file is specified
         if output_file:
             result_df.to_csv(output_file, index=False, encoding='utf-8')
@@ -231,6 +326,12 @@ def consolidate_all_playlists(stations=None):
         )
         all_df.to_csv(all_output, index=False, encoding='utf-8')
         print("\nCombined {} tracks saved to: {}".format(len(all_df), all_output))
+        
+        # Update cumulative, ever-growing union across days
+        try:
+            _update_cumulative_playlist(all_df, combined_dir, stations_str, date_str)
+        except Exception as e:
+            print(f"Warning: failed to update cumulative playlist: {e}")
         print("\nTop 10 overall tracks:")
         print(all_df.head(10).to_string(index=False))
         
@@ -320,6 +421,117 @@ def main():
         
     # Return the automated mode flag for use after main()
     return automated_mode
+
+def _normalize_key2(artist: str, title: str) -> str:
+    """Simple normalization to deduplicate by Artist/Title across days."""
+    a = (artist or "").strip().lower()
+    t = (title or "").strip().lower()
+    return f"{a} - {t}"
+
+def _update_cumulative_playlist(all_df: pd.DataFrame, combined_dir: str, stations_str: str, date_str: str) -> None:
+    """Update an ever-growing cumulative CSV with deduped tracks across runs.
+
+    Columns maintained:
+    - Artist, Title
+    - Stations: comma-separated union of stations observed
+    - FirstSeen, LastSeen: YYYY-MM-DD
+    - BPM, Key: carried forward when available
+    """
+    cumulative_dir = os.path.join(combined_dir, "Cumulative")
+    os.makedirs(cumulative_dir, exist_ok=True)
+
+    stable_name = f"All_Radio_Cumulative_{stations_str}.csv"
+    stable_path = os.path.join(cumulative_dir, stable_name)
+    snapshot_path = os.path.join(cumulative_dir, f"All_Radio_Cumulative_{stations_str}_{date_str}.csv")
+
+    # Load existing cumulative
+    if os.path.exists(stable_path):
+        cum_df = pd.read_csv(stable_path)
+    else:
+        cum_df = pd.DataFrame(columns=[
+            'Artist', 'Title', 'Stations', 'FirstSeen', 'LastSeen', 'BPM', 'Key'
+        ])
+
+    # Build index map for quick updates
+    idx_map = {}
+    for i, row in cum_df.iterrows():
+        k = _normalize_key2(row.get('Artist', ''), row.get('Title', ''))
+        if k and k not in idx_map:
+            idx_map[k] = i
+
+    # Ensure required columns exist
+    for col in ['Stations', 'FirstSeen', 'LastSeen', 'BPM', 'Key']:
+        if col not in cum_df.columns:
+            cum_df[col] = ""
+
+    # Apply updates from today's combined set
+    def _split_stations(s: str) -> set:
+        if not isinstance(s, str) or not s.strip():
+            return set()
+        return set(x.strip() for x in s.split(',') if x.strip())
+
+    for _, row in all_df.iterrows():
+        artist = str(row.get('Artist', '')).strip()
+        title = str(row.get('Title', '')).strip()
+        if not artist and not title:
+            # try to derive from Track if present
+            tr = str(row.get('Track', ''))
+            a, b = _split_artist_title(tr)
+            artist, title = a, b
+        if not artist and not title:
+            continue
+        key = _normalize_key2(artist, title)
+        stations_today = _split_stations(str(row.get('Stations', '')))
+        bpm_new = row.get('BPM')
+        key_new = row.get('Key')
+
+        if key in idx_map:
+            i = idx_map[key]
+            # Union stations
+            existing_stations = _split_stations(str(cum_df.at[i, 'Stations']))
+            all_stations = sorted(existing_stations.union(stations_today))
+            cum_df.at[i, 'Stations'] = ", ".join(all_stations)
+            # Dates
+            first_seen = str(cum_df.at[i, 'FirstSeen'] or date_str)
+            last_seen = str(cum_df.at[i, 'LastSeen'] or date_str)
+            if first_seen > date_str:
+                first_seen = date_str
+            if last_seen < date_str:
+                last_seen = date_str
+            cum_df.at[i, 'FirstSeen'] = first_seen
+            cum_df.at[i, 'LastSeen'] = last_seen
+            # Fill BPM/Key if missing
+            if (pd.isna(cum_df.at[i, 'BPM']) or str(cum_df.at[i, 'BPM']) == "") and (bpm_new is not None and str(bpm_new) != ""):
+                cum_df.at[i, 'BPM'] = bpm_new
+            if (not str(cum_df.at[i, 'Key'])) and key_new:
+                cum_df.at[i, 'Key'] = key_new
+        else:
+            # Add new row
+            cum_df = pd.concat([
+                cum_df,
+                pd.DataFrame([{
+                    'Artist': artist,
+                    'Title': title,
+                    'Stations': ", ".join(sorted(stations_today)) if stations_today else "",
+                    'FirstSeen': date_str,
+                    'LastSeen': date_str,
+                    'BPM': bpm_new if bpm_new is not None else "",
+                    'Key': key_new if key_new else "",
+                }])
+            ], ignore_index=True)
+            idx_map[key] = len(cum_df) - 1
+
+    # Sort for readability
+    try:
+        cum_df['LastSeen'] = cum_df['LastSeen'].astype(str)
+    except Exception:
+        pass
+    cum_df = cum_df.sort_values(['LastSeen', 'Artist', 'Title'], ascending=[False, True, True]).reset_index(drop=True)
+
+    # Save stable and snapshot
+    cum_df.to_csv(stable_path, index=False, encoding='utf-8')
+    cum_df.to_csv(snapshot_path, index=False, encoding='utf-8')
+    print(f"Updated cumulative playlist: {stable_path}")
 
 if __name__ == "__main__":
     automated_mode = main()

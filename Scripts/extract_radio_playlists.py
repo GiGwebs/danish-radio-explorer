@@ -824,7 +824,8 @@ def extract_station_playlist(station_name, separate_languages=True):
         elif is_english(title, artist):
             english_tracks.append(track)
         else:
-            other_tracks.append(track)
+            # Fallback: treat unclassified items as English/non-Danish
+            english_tracks.append(track)
 
     # Print unclassified tracks for debugging
     if other_tracks:

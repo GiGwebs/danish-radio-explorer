@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 import io
 import zipfile
+import playlist_lib as pl
 try:
     from streamlit_autorefresh import st_autorefresh  # type: ignore
 except Exception:
@@ -29,6 +30,13 @@ STATUS_PATH = OUTPUTS_DIR / "Status" / "last_update.json"
 LOGS_DIR = BASE_DIR / "Logs"
 WRAPPER_PATH = BASE_DIR / "Scripts" / "run_radio_update.sh"
 LOCK_PATH = LOGS_DIR / ".update.lock"
+
+# Defaults for DJ integration (configurable in UI)
+LIBRARY_ROOT_DEFAULT = Path("/Users/gigwebs/Music/DJ Collection")
+LIB_INDEX_JSON = OUTPUTS_DIR / "Cache" / "library_index.json"
+VDJ_DB_PATH_DEFAULT = Path("/Users/gigwebs/Library/Application Support/VirtualDJ/database.xml")
+VDJ_MYLIST_DIR_DEFAULT = Path("/Users/gigwebs/Library/Application Support/VirtualDJ/MyLists")
+M3U_OUT_DIR_DEFAULT = OUTPUTS_DIR / "Playlists"
 
 NO_PLAYLIST_MARKER = "NoPlaylist"
 
@@ -348,7 +356,7 @@ if status:
     ctrl1, ctrl2 = st.columns([1, 2])
     with ctrl1:
         if st.button("Reload status"):
-            st.experimental_rerun()
+            st.rerun()
     with ctrl2:
         try:
             st.download_button(
@@ -394,7 +402,7 @@ if status:
         with reset_col:
             if st.button("Reset", key="reset_status_filter"):
                 st.session_state["status_filter"] = []
-                st.experimental_rerun()
+                st.rerun()
 
         filt = selected
         view = df if not filt else df[df["status"].isin(filt)].reset_index(drop=True)
@@ -573,12 +581,164 @@ if log_choice:
     r1, r2 = st.columns([1, 1])
     with r1:
         if st.button("Refresh log view"):
-            st.experimental_rerun()
+            st.rerun()
     with r2:
         if st.button("Reset log filter"):
             st.session_state["log_filter"] = ""
-            st.experimental_rerun()
+            st.rerun()
 
-st.divider()
+    st.divider()
+    # ----------------------------------------------------------------------------------
+    # Playlists (beta): Local matching, VDJ auto-export, on-demand M3U export
+    # ----------------------------------------------------------------------------------
+    st.subheader("Playlists (beta)")
+    with st.expander("DJ integration settings"):
+        c1, c2 = st.columns(2)
+        with c1:
+            lib_root_str = st.text_input(
+                "Local library root",
+                value=str(LIBRARY_ROOT_DEFAULT),
+                key="lib_root",
+                help="Root folder that contains your local music files",
+            )
+            vdj_db_str = st.text_input(
+                "VirtualDJ database.xml",
+                value=str(VDJ_DB_PATH_DEFAULT),
+                key="vdj_db_path",
+            )
+        with c2:
+            vdj_mylist_str = st.text_input(
+                "VirtualDJ MyLists folder",
+                value=str(VDJ_MYLIST_DIR_DEFAULT),
+                key="vdj_mylist_dir",
+            )
+            m3u_out_str = st.text_input(
+                "M3U output folder",
+                value=str(M3U_OUT_DIR_DEFAULT),
+                key="m3u_out_dir",
+            )
+        b1, b2, b3 = st.columns([1, 1, 2])
+        with b1:
+            if st.button("Rescan library", key="btn_rescan_lib"):
+                with st.spinner("Scanning local library (mutagen)..."):
+                    LIB_INDEX_JSON.parent.mkdir(parents=True, exist_ok=True)
+                    existing = pl.load_index(Path(LIB_INDEX_JSON))
+                    new_index = pl.scan_library(Path(lib_root_str), existing_index=existing)
+                    pl.save_index(Path(LIB_INDEX_JSON), new_index)
+                st.success("Library index updated.")
+                st.rerun()
+        with b2:
+            if st.button("Open MyLists in Finder", key="btn_open_mylists"):
+                try:
+                    subprocess.Popen(["open", vdj_mylist_str])
+                except Exception:
+                    pass
+        with b3:
+            if st.button("Open M3U folder", key="btn_open_m3u"):
+                try:
+                    subprocess.Popen(["open", m3u_out_str])
+                except Exception:
+                    pass
 
-st.caption("Tip: Use the Run now button sparingly. The LaunchAgent will run on Tuesday and Friday at 09:30.")
+    # Discover compiled playlists
+    compiled_csvs = pl.find_compiled_playlists(OUTPUTS_DIR)
+    if not compiled_csvs:
+        st.info("No compiled playlists found under Outputs/. Run the orchestrator first.")
+    else:
+        # Selection and controls
+        names = [pl.infer_playlist_name(p) for p in compiled_csvs]
+        sel_name = st.selectbox("Choose a compiled playlist", options=names, index=0, key="pl_select")
+        sel_idx = names.index(sel_name)
+        sel_csv = compiled_csvs[sel_idx]
+        st.caption(f"Using CSV: {sel_csv}")
+
+        # Load library index and TIDAL index from VDJ db
+        lib_index = pl.load_index(Path(LIB_INDEX_JSON))
+        if not lib_index.get("tracks"):
+            st.warning("Library index is empty. Click 'Rescan library' above to build it.")
+        tidal_index = pl.build_tidal_index_from_vdj_db(Path(vdj_db_str))
+
+        # Matching
+        threshold = st.slider(
+            "Fuzzy match threshold",
+            min_value=70,
+            max_value=100,
+            value=88,
+            step=1,
+            key="match_thresh",
+        )
+        matches = pl.resolve_matches_for_csv(sel_csv, lib_index, tidal_index, threshold=threshold)
+        total = len(matches)
+        local_count = sum(1 for m in matches if m.local_path)
+        tidal_count = sum(1 for m in matches if (not m.local_path) and m.tidal_id)
+        missing_count = total - local_count - tidal_count
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Tracks", total)
+        with c2:
+            st.metric("Local matched", local_count)
+        with c3:
+            st.metric("TIDAL linked", tidal_count)
+        with c4:
+            st.metric("Missing", missing_count)
+
+        # Show preview table
+        if total:
+            def _mmss(v: Optional[float]) -> str:
+                try:
+                    if v is None:
+                        return ""
+                    v = float(v)
+                    m = int(v // 60)
+                    s = int(round(v % 60))
+                    return f"{m}:{s:02d}"
+                except Exception:
+                    return ""
+
+            view_rows = []
+            for m in matches[:300]:  # cap preview
+                local_dur = None
+                if m.local_path:
+                    meta = lib_index.get("tracks", {}).get(str(m.local_path), {})
+                    local_dur = meta.get("duration")
+                bpm_raw = getattr(m.row, "bpm", None)
+                key_raw = getattr(m.row, "musical_key", None)
+                view_rows.append({
+                    "Artist": m.row.artist,
+                    "Title": m.row.title,
+                    "BPM": (round(bpm_raw, 1) if isinstance(bpm_raw, (int, float)) else (bpm_raw or "")),
+                    "Key": (key_raw or ""),
+                    "CSV Dur": _mmss(m.row.duration),
+                    "Local Dur": _mmss(local_dur),
+                    "Local": str(m.local_path) if m.local_path else "",
+                    "Confidence": round(m.confidence, 1),
+                    "TIDAL": f"netsearch://{m.tidal_id}" if m.tidal_id else "",
+                })
+            st.dataframe(pd.DataFrame(view_rows), use_container_width=True, hide_index=True)
+
+        # Auto-export VDJ folder on compute
+        auto_vdj = st.checkbox("Auto-export VirtualDJ list to MyLists", value=True, key="auto_vdj")
+        use_generic_net = st.checkbox(
+            "Use generic netsearch fallback for missing (experimental)", value=True, key="use_generic_net"
+        )
+        list_name = sel_name
+        if auto_vdj and total:
+            try:
+                vdj_out = pl.export_vdjfolder(
+                    list_name, matches, Path(vdj_mylist_str), use_generic_netsearch=use_generic_net
+                )
+                st.success(f"VDJ list written: {vdj_out}")
+            except Exception as e:
+                st.warning(f"Failed to write VDJ list: {e}")
+
+        # On-demand M3U export
+        m3u_col1, m3u_col2 = st.columns([1, 3])
+        with m3u_col1:
+            if st.button("Export M3U8 now", key="btn_export_m3u"):
+                try:
+                    m3u_out = pl.export_m3u8(list_name, matches, Path(m3u_out_str))
+                    st.success(f"M3U8 exported: {m3u_out}")
+                except Exception as e:
+                    st.warning(f"Failed to export M3U8: {e}")
+
+    st.caption("Tip: Use the Run now button sparingly. The LaunchAgent will run on Tuesday and Friday at 09:30.")

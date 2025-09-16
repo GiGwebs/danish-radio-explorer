@@ -1,3 +1,20 @@
+import os
+import sys
+from pathlib import Path
+
+# Try to import playlist_lib from Scripts/webapp to leverage meta enrichment
+BASE_SCRIPTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__)))
+WEBAPP_DIR = os.path.join(BASE_SCRIPTS_DIR, 'webapp')
+if WEBAPP_DIR not in sys.path:
+    sys.path.insert(0, WEBAPP_DIR)
+try:
+    import playlist_lib as pl  # type: ignore
+except Exception:
+    pl = None
+
+VDJ_DB_PATH_DEFAULT = Path(
+    "/Users/gigwebs/Library/Application Support/VirtualDJ/database.xml"
+)
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
@@ -26,6 +43,7 @@ import pandas as pd
 import logging
 import shutil
 from datetime import datetime
+from pathlib import Path
 import json
 import re
 from urllib.parse import quote as urlquote
@@ -481,7 +499,13 @@ def deduplicate_tracks(data):
     deduplicated.sort(key=lambda x: x.get('Artist', '').lower())
     return deduplicated
 
-def create_transfer_csv(tracks, output_file, downloaded_map=None, write_annotated: bool = False, write_xlsx_review: bool = False):
+def create_transfer_csv(
+    tracks,
+    output_file,
+    downloaded_map=None,
+    write_annotated: bool = False,
+    write_xlsx_review: bool = False,
+):
     """Create a CSV in transfer service format for importing"""
     try:
         # Extract artist and title from the "Track" column
@@ -544,6 +568,90 @@ def create_transfer_csv(tracks, output_file, downloaded_map=None, write_annotate
         
         # Create DataFrame and save to CSV
         transfer_df = pd.DataFrame(deduplicated_data)
+
+        # Upstream enrichment: add BPM/Key columns when available.
+        # 1) If source DataFrame already has BPM/Key, map them to deduplicated rows.
+        # 2) Otherwise, enrich via VDJ DB and library tags if playlist_lib is available.
+        try:
+            bpms = []
+            keys = []
+            bpm_key_map = {}
+            # Build a mapping from normalized key -> (BPM, Key) if present
+            if 'BPM' in tracks.columns or 'Key' in tracks.columns:
+                try:
+                    for _, r in tracks.iterrows():
+                        a = str(r.get('Artist', '')).strip()
+                        t = str(r.get('Title', '')).strip()
+                        if not a or not t:
+                            # Try Track split if present
+                            if 'Track' in r:
+                                parts = str(r['Track']).split(' - ', 1)
+                                if len(parts) == 2:
+                                    a, t = parts[0].strip(), parts[1].strip()
+                        if not a and not t:
+                            continue
+                        key_norm = (
+                            pl.normalize_key(a, t) if pl is not None else f"{a.lower()} - {t.lower()}"
+                        )
+                        bpm_val = r.get('BPM') if 'BPM' in tracks.columns else None
+                        key_val = r.get('Key') if 'Key' in tracks.columns else None
+                        if bpm_val is not None or key_val:
+                            bpm_key_map[key_norm] = (bpm_val, key_val)
+                except Exception:
+                    pass
+
+            # Build enrichment sources if needed
+            vdj_meta = {}
+            lib_index = {}
+            by_key = {}
+            tracks_meta = {}
+            if pl is not None:
+                try:
+                    vdj_meta = pl.build_vdj_meta_index(VDJ_DB_PATH_DEFAULT)
+                except Exception:
+                    vdj_meta = {}
+                try:
+                    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+                    lib_idx_path = Path(base_dir) / 'Outputs' / 'Cache' / 'library_index.json'
+                    lib_index = pl.load_index(lib_idx_path)
+                    by_key = lib_index.get('by_key', {}) or {}
+                    tracks_meta = lib_index.get('tracks', {}) or {}
+                except Exception:
+                    lib_index = {}
+
+            for row in deduplicated_data:
+                a = row.get('Artist', '')
+                t = row.get('Title', '')
+                key_norm = (
+                    pl.normalize_key(a, t) if pl is not None else f"{a.lower()} - {t.lower()}"
+                )
+                bpm_val, key_val = (None, None)
+                # Prefer source-provided values
+                if key_norm in bpm_key_map:
+                    bpm_val, key_val = bpm_key_map.get(key_norm, (None, None))
+                # Then VDJ DB
+                if (bpm_val is None or not key_val) and isinstance(vdj_meta, dict):
+                    vm = vdj_meta.get(key_norm)
+                    if vm:
+                        bpm_val = bpm_val if bpm_val is not None else vm.get('bpm')
+                        key_val = key_val or vm.get('key')
+                # Then library tags
+                if (bpm_val is None or not key_val) and by_key:
+                    paths = by_key.get(key_norm, [])
+                    if paths:
+                        meta = tracks_meta.get(paths[0], {})
+                        if bpm_val is None:
+                            bpm_val = meta.get('tag_bpm')
+                        if not key_val:
+                            key_val = meta.get('tag_key')
+                bpms.append(bpm_val)
+                keys.append(key_val)
+
+            transfer_df['BPM'] = bpms
+            transfer_df['Key'] = keys
+        except Exception:
+            # If enrichment fails, continue without BPM/Key
+            pass
         transfer_df.to_csv(output_file, index=False)
 
         # Optionally write annotated copy (and XLSX review)
@@ -551,6 +659,13 @@ def create_transfer_csv(tracks, output_file, downloaded_map=None, write_annotate
             annotated = annotate_records(deduplicated_data, downloaded_map)
             annotated_df = pd.DataFrame(annotated)
             annotated_file = os.path.splitext(output_file)[0] + '_annotated.csv'
+            # Propagate BPM/Key to annotated copy if present
+            try:
+                if 'BPM' in transfer_df.columns and 'Key' in transfer_df.columns:
+                    annotated_df['BPM'] = transfer_df['BPM']
+                    annotated_df['Key'] = transfer_df['Key']
+            except Exception:
+                pass
             annotated_df.to_csv(annotated_file, index=False)
             logger.info("Created annotated transfer CSV: {}".format(annotated_file))
 
@@ -651,6 +766,26 @@ def prepare_radio_playlists(downloaded_map=None, annotate: bool = False, xlsx_re
                 write_annotated=annotate,
                 write_xlsx_review=(annotate and xlsx_review),
             )
+    
+    # Process Cumulative All-Stations compilation (ever-growing union)
+    try:
+        cumulative_dir = os.path.join(base_dir, 'Outputs', 'Combined', 'Cumulative')
+        cum_stable = os.path.join(cumulative_dir, 'All_Radio_Cumulative_All_Stations.csv')
+        cum_file = cum_stable if os.path.exists(cum_stable) else get_latest_file_by_prefix(cumulative_dir, 'All_Radio_Cumulative_')
+        if cum_file and os.path.getsize(cum_file) > 0:
+            cum_tracks = read_playlist_file(cum_file)
+            if not cum_tracks.empty:
+                print(f"Found {len(cum_tracks)} cumulative tracks in {os.path.basename(cum_file)}")
+                cum_transfer_file = os.path.join(transfer_dir, f"All_Radio_Cumulative_{today}.csv")
+                create_transfer_csv(
+                    cum_tracks,
+                    cum_transfer_file,
+                    downloaded_map=downloaded_map if annotate else None,
+                    write_annotated=annotate,
+                    write_xlsx_review=(annotate and xlsx_review),
+                )
+    except Exception as e:
+        logger.warning(f"Failed to prepare cumulative transfer CSV: {e}")
     
     print("\nPlaylists prepared for transfer services!")
     print(f"\nFiles created in: {transfer_dir}")

@@ -565,6 +565,31 @@ def run_automated_update(
         
         logger.info("Radio playlist consolidator completed successfully")
         
+        # 4b. Generate full transfer files (radio + cumulative) unconditionally
+        try:
+            logger.info("Generating full transfer files (radio + cumulative)...")
+            transfer_full_args = [
+                sys.executable,
+                TRANSFER_SCRIPT,
+                '--source', 'radio',
+            ]
+            transfer_full = subprocess.run(
+                transfer_full_args,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+            )
+            if transfer_full.stdout:
+                logger.info(f"Transfer (radio) stdout (truncated):\n{transfer_full.stdout[:2000]}")
+            if transfer_full.stderr:
+                logger.warning(f"Transfer (radio) stderr (truncated):\n{transfer_full.stderr[:2000]}")
+            if transfer_full.returncode != 0:
+                logger.warning("Transfer (radio) returned non-zero exit code; continuing with workflow.")
+            else:
+                logger.info("Full radio + cumulative transfer generation completed successfully")
+        except Exception as e:
+            logger.warning(f"Failed to generate full transfer files: {e}")
+
         # 5. Get the new consolidated files
         new_danish_file = get_latest_file(CONSOLIDATED_DANISH_DIR)
         new_english_file = get_latest_file(CONSOLIDATED_ENGLISH_DIR)
