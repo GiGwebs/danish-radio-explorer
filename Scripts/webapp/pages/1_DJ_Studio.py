@@ -747,6 +747,45 @@ with right_col:
                 key="dj_export_new_name",
             )
 
+        # Target playlist/name selector (Option A)
+        # Discover existing targets from VDJ MyLists and M3U output folders
+        try:
+            vdj_targets = []
+            p_vdj = Path(vdj_mylist_str)
+            if p_vdj.exists():
+                vdj_targets = [p.stem for p in p_vdj.glob("*.vdjfolder")]
+        except Exception:
+            vdj_targets = []
+        try:
+            m3u_targets = []
+            p_m3u = Path(m3u_out_str)
+            if p_m3u.exists():
+                m3u_targets = [p.stem for p in p_m3u.glob("*.m3u8")]
+        except Exception:
+            m3u_targets = []
+
+        # Build unified target options (series name first), de-duplicated
+        target_set = {str(list_name)}
+        for nm in vdj_targets + m3u_targets:
+            if nm and nm.strip():
+                target_set.add(nm.strip())
+        target_options = [str(list_name)] + sorted(x for x in target_set if x != str(list_name)) + ["Custom…"]
+        target_choice = st.selectbox(
+            "Target playlist/name (for Replace/Add)", target_options, index=0, key="dj_export_target_choice"
+        )
+        if target_choice == "Custom…":
+            target_name = st.text_input(
+                "Custom target name (for Replace/Add)", value=str(list_name), key="dj_export_target_custom"
+            ).strip() or str(list_name)
+        else:
+            target_name = target_choice
+
+        # Hint (Option D)
+        st.caption(
+            "Tip: Replace/Add export to the selected Target name above. 'Save as new' writes to 'New list name'; "
+            "to append later, pick that name as Target."
+        )
+
         cbtn1, cbtn2 = st.columns(2)
         with cbtn1:
             if st.button(
@@ -757,7 +796,7 @@ with right_col:
                         matches, st.session_state.get("dj_status_filter", "All")
                     )
                     outp = pl.export_vdjfolder_mode(
-                        list_name,
+                        target_name if export_mode != "save_as_new" else list_name,
                         export_set,
                         Path(vdj_mylist_str),
                         mode=export_mode,
@@ -778,7 +817,7 @@ with right_col:
                     )
                     # M3U8 export with mode (replace/add/save-as-new)
                     outp = pl.export_m3u8_mode(
-                        list_name,
+                        target_name if export_mode != "save_as_new" else list_name,
                         export_set,
                         Path(m3u_out_str),
                         mode=export_mode,
