@@ -132,6 +132,7 @@ def save_prefs() -> None:
     except Exception:
         pass
 
+
 # Load persisted preferences and enforce always-on minimal UI + compact metrics
 load_prefs()
 st.session_state["dj_minimal_ui"] = True
@@ -183,6 +184,7 @@ def run_orchestrator_dj(
                 pass
         st.error(f"Failed to start orchestrator: {e}")
         return None
+
 
 def _mmss(v: Optional[float]) -> str:
     try:
@@ -640,9 +642,9 @@ with right_col:
 
     # Theme-aware badge colors (high-contrast, non-transparent)
     is_dark_theme = str(st.get_option("theme.base") or "light").lower() == "dark"
-    local_bg = "#2e7d32"   # solid green
-    tidal_bg = "#1565c0"   # solid blue
-    missing_bg = "#ef6c00" # solid orange
+    local_bg = "#2e7d32"    # solid green
+    tidal_bg = "#1565c0"    # solid blue
+    missing_bg = "#ef6c00"  # solid orange
     neutral_bg = "#424242" if is_dark_theme else "#e0e0e0"
     text_on_colored = "#ffffff"
     text_on_neutral = "#ffffff" if is_dark_theme else "#111111"
@@ -718,7 +720,7 @@ with right_col:
             return [m for m in ms if (not getattr(m, 'local_path', None)) and (not getattr(m, 'tidal_id', None))]
         return ms
 
-    with st.expander("Export & options", expanded=False):
+    with st.expander("Export & options", expanded=True):
         use_generic_net = st.checkbox(
             "Use generic netsearch fallback for missing (experimental)",
             value=True,
